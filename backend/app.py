@@ -1,13 +1,22 @@
 from flask import Flask, jsonify
 import os
 import mysql.connector
+import redis
 
 app = Flask(__name__)
 
+
 DB_HOST = os.getenv("DB_HOST", "mysql")
 DB_USER = os.getenv("DB_USER", "appuser")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "changeme")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME", "appdb")
+
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+redis_client = redis.Redis(
+    host=REDIS_HOST,
+    port=6379,
+    decode_responses=True
+)
 
 
 def get_connection():
@@ -54,28 +63,5 @@ def database_time():
 
 @app.route("/api/visitor")
 def visitor_counter():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS visitor_counter (
-            id INT PRIMARY KEY,
-            visits INT NOT NULL
-        )
-    """)
-
-    cursor.execute("""
-        INSERT INTO visitor_counter (id, visits)
-        VALUES (1, 1)
-        ON DUPLICATE KEY UPDATE visits = visits + 1
-    """)
-
-    conn.commit()
-
-    cursor.execute("SELECT visits FROM visitor_counter WHERE id = 1")
-    visits = cursor.fetchone()[0]
-
-    cursor.close()
-    conn.close()
-
+    visits = redis_client.incr("visitor_count")
     return jsonify(visits=visits)

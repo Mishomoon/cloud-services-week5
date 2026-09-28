@@ -14,6 +14,6 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: mishmoon/frontend:1.1
+          image: mishmoon/frontend:1.2
           ports:
             - containerPort: 80
