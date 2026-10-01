@@ -1,287 +1,79 @@
-# Cloud Services – Week 5
+# Cloud Services – Week 5: Redis cache and visitor counter
 
-## Project Overview
+This is my Week 5 project. I took my Week 4 app (Nginx frontend, Flask backend, MySQL) on CSC Rahti and added **Redis** as a new component. The backend uses Redis for a visitor counter.
 
-This repository contains my Cloud Services Week 5 project.
+- Live app: https://frontend-cloud-services-week5.2.rahtiapp.fi
+- The full documentation (Part A answers and screenshots) is on the same page.
 
-In Week 5, I extended the multi-container application that was created during the previous week. The application is deployed on CSC Rahti using OpenShift.
+## Architecture
 
-The main goal of this week was to add and deploy an additional component while keeping the existing application working. I also worked with OpenShift Deployments, Services, Routes, container images, networking, configuration, testing and troubleshooting.
+```text
+User -> Rahti Route -> Nginx frontend -> Flask/Gunicorn backend -> Redis (visitor counter)
+                                                                -> MySQL (database + PVC)
+```
 
-The application can be accessed through the public Rahti Route:
+Redis runs in its own pod with its own Deployment and Service. It is not inside the backend container. It has no Route, so only the backend can reach it inside the cluster.
 
-https://frontend-cloud-services-week5.2.rahtiapp.fi/
+## What I added in Week 5
 
----
+| File | What it does |
+|---|---|
+| `rahti/redis-deployment.yaml` | Redis Deployment (Redis image, 1 replica, port 6379) |
+| `rahti/redis-service.yaml` | Service named `redis` on port 6379 |
+| `rahti/configmap.yaml` | Backend config, including `REDIS_HOST=redis` |
+| `backend/requirements.txt` | Added the `redis` Python package |
+| `backend/app.py` | New `/api/visitor` endpoint |
 
-## Application Architecture
+## How the visitor counter works
 
-The Week 5 application is based on the multi-container architecture from Week 4.
+The backend connects to Redis using the Service name:
 
-The main components are:
+```python
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+redis_client = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
+```
 
-- Frontend
-- Backend
-- MySQL database
-- Additional Week 5 component
-- OpenShift Services
-- OpenShift Route
+Each request to `/api/visitor` runs `redis_client.incr("visitor_count")` and returns the new number as JSON, for example `{"visits": 5}`. The backend gets `REDIS_HOST` from the ConfigMap (`envFrom` with `backend-config`), so no values are hard-coded in the code.
 
-The general application flow is:
+## Evidence
 
-    Internet
-       |
-       v
-    OpenShift Route
-       |
-       v
-    Frontend
-       |
-       v
-    Backend
-       |
-       +----------------+
-       |                |
-       v                v
-     MySQL        Week 5 component
+Screenshots are in `frontend/screenshots-week5/`.
 
-Each application component runs in its own container and is managed by OpenShift.
+| What | File |
+|---|---|
+| Deployments and pods (frontend, backend, MySQL, Redis all running) | `Week 5 Deployment Status.png` |
+| Services, including Redis on 6379 | `week5-services.png` |
+| Redis running as its own Deployment | `week5-redis-deployment.png` |
+| Redis host in the ConfigMap | `configmap.yaml.png` |
+| Redis package in requirements | `requirements.txt.png` |
+| Visitor counter test | `visitor count.png` |
 
-The frontend is exposed through the public Rahti Route. The backend communicates with the other services through the internal OpenShift network.
+## Problems I had
 
----
+**1. Redis permission error.** Redis could not save its RDB file in `/data` and the backend got errors. Redis is only used as a cache here, so I turned off RDB saving and append-only mode. (`redis-error.png`)
 
-## Deployment on Rahti
+**2. Rahti CPU quota.** When I updated the Redis Deployment, the new pod would not start because the project had already used its 4 CPUs and the new pod asked for another 500m. The old Redis pod kept running, so the problem was the quota and not the Service. **[TODO: write how you fixed it]** (`CPU-quota.png`)
 
-The application was deployed to CSC Rahti using OpenShift.
+**3. ImagePullBackOff on the frontend.** The frontend pod could not pull its image because the image tag was missing on Docker Hub. I pushed the image again (`mishmoon/frontend:1.8`) and updated the Deployment. After that the pod started.
 
-The deployment uses OpenShift resources such as:
+## If this went to production
 
-- Deployments
-- Pods
-- Services
-- Routes
-- ConfigMaps and/or Secrets where needed
+- **Redis loses its data on restart.** The visitor counter starts again from zero when the Redis pod is recreated. That is fine for a counter in this course project, but important data must stay in MySQL, which uses persistent storage.
+- **Cache invalidation.** If cached data comes from MySQL, it can get old. I would use a TTL or delete the key when the data changes.
+- **Reliability.** One Redis replica is fine here. In production I would add monitoring and a more resilient Redis setup.
+- **Security.** Redis is only reachable through an internal Service. A Web Application Firewall would go in front of the Route, which is the only public entry point. No passwords are committed to this repository. **[TODO: write where the MySQL password is stored, e.g. a Secret]**
+- **Link to Part A.** YAML (Part A) is the format of all my manifests. Keeping credentials on the backend (Part A, AI platforms) is the same rule I would follow for any API key I added later.
 
-The application was checked using OpenShift CLI commands.
+## Repository structure
 
-For example:
+```text
+backend/        Flask app (app.py, Dockerfile, requirements.txt)
+db/init/        MySQL init script
+frontend/       Nginx frontend and screenshots-week5/
+rahti/          Kubernetes/OpenShift YAML files
+docker-compose.dev.yml, docker-compose.prod.yml
+```
 
-    oc get pods
+## Cleanup
 
-This command was used to check whether the application pods were running correctly.
-
-Services were checked with:
-
-    oc get svc
-
-Deployments were checked with:
-
-    oc get deployment
-
-The public Route was checked with:
-
-    oc get route
-
-These commands helped verify that the different parts of the application were correctly deployed.
-
----
-
-## Containers
-
-Each application component runs inside a container.
-
-The containers provide an isolated environment for the application services. OpenShift manages the containers through Pods and Deployments.
-
-The frontend container is responsible for serving the web application.
-
-The backend container provides the application/API functionality.
-
-The MySQL container provides the database used by the application.
-
-The additional Week 5 component is deployed independently so that it can be managed separately from the other components.
-
----
-
-## OpenShift Services
-
-OpenShift Services provide stable internal access to the application components.
-
-Instead of connecting directly to a Pod IP address, other components can communicate with a Service.
-
-This is important because Pod IP addresses can change when Pods are recreated.
-
-The application therefore uses OpenShift networking to allow the different containers to communicate with each other.
-
-For example, the backend can communicate with internal services using their Service names instead of depending on temporary Pod IP addresses.
-
----
-
-## Public Route
-
-The frontend is exposed through an OpenShift Route.
-
-The public application can be accessed here:
-
-https://frontend-cloud-services-week5.2.rahtiapp.fi/
-
-The Route makes it possible to access the application from a web browser without directly exposing the individual Pods.
-
----
-
-## Testing
-
-After deployment, I tested the application through the public Rahti URL.
-
-I also checked the status of the application using OpenShift commands.
-
-Important commands used during testing included:
-
-    oc get pods
-
-    oc get svc
-
-    oc get deployment
-
-    oc get route
-
-The purpose of these tests was to verify that:
-
-- the Pods were running
-- the Deployments were available
-- the Services existed
-- the Route was available
-- the application could be accessed through the browser
-- the different application components could communicate with each other
-
----
-
-## Troubleshooting
-
-When problems occurred, I used OpenShift commands to investigate them.
-
-For example, Pod information can be inspected with:
-
-    oc describe pod <pod-name>
-
-Container logs can be viewed with:
-
-    oc logs <pod-name>
-
-The Deployment status can be checked with:
-
-    oc rollout status deployment/<deployment-name>
-
-These commands make it possible to find configuration problems, container errors and deployment issues.
-
-Checking the Pods first is useful because it quickly shows whether a component is Running, Pending, restarting or failing.
-
----
-
-## Security and Reliability
-
-Security and reliability are important when deploying applications in a cloud environment.
-
-Credentials and other sensitive information should not be stored directly in source code or committed to GitHub.
-
-Secrets can be used for sensitive configuration instead of placing passwords or tokens directly into application files.
-
-The application should also use the internal OpenShift network for communication between services whenever possible.
-
-Another important reliability consideration is that Pods can be recreated by OpenShift. The application should therefore not depend on a specific Pod IP address.
-
-Using Services provides a stable way for components to communicate even when Pods are replaced.
-
----
-
-## Problems Encountered
-
-During the Week 5 work, deployment and configuration issues were investigated using OpenShift.
-
-The main troubleshooting approach was:
-
-1. Check the Pods.
-
-       oc get pods
-
-2. Check the Services.
-
-       oc get svc
-
-3. Check the Deployment.
-
-       oc get deployment
-
-4. Inspect a problematic Pod.
-
-       oc describe pod <pod-name>
-
-5. Check container logs.
-
-       oc logs <pod-name>
-
-6. Check the rollout status.
-
-       oc rollout status deployment/<deployment-name>
-
-This helped identify whether a problem was related to the container, deployment, networking or configuration.
-
----
-
-## What I Learned
-
-During Week 5, I learned more about deploying multi-container applications using OpenShift and Rahti.
-
-I learned how:
-
-- Pods run containers in OpenShift
-- Deployments manage application Pods
-- Services provide stable internal networking
-- Routes expose applications publicly
-- OpenShift can recreate Pods
-- containerized services communicate through the OpenShift network
-- `oc` commands can be used to inspect and troubleshoot applications
-- logs can be used to investigate application problems
-- cloud applications need to consider security and reliability
-
-I also gained more practical experience working with a real application deployed in a cloud environment rather than only running the containers locally.
-
----
-
-## Project Structure
-
-The repository contains the files needed for the Week 5 application and its deployment.
-
-The project includes the application source code, container configuration and OpenShift-related configuration used during the assignment.
-
-The GitHub repository provides the complete project files and allows the implementation to be reviewed.
-
----
-
-## Live Application
-
-The deployed Week 5 application is available here:
-
-https://frontend-cloud-services-week5.2.rahtiapp.fi/
-
----
-
-## GitHub Repository
-
-The complete Week 5 project is available in this GitHub repository:
-
-https://github.com/Mishomoon/cloud-services-week5
-
-The repository contains the source code and configuration files used for the Week 5 project.
-
----
-
-## Conclusion
-
-Week 5 extended the previous multi-container application by adding another independently deployed component.
-
-The application was deployed to CSC Rahti using OpenShift and tested through the public Route.
-
-Through this assignment, I gained practical experience with containers, OpenShift Deployments, Pods, Services, Routes, networking, troubleshooting, security and reliability.
-
-The final application is available through the public Rahti URL, and the complete project is available in the GitHub repository.
+These Rahti resources are temporary course resources. I will remove them after peer review.
